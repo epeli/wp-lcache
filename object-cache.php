@@ -468,10 +468,6 @@ class WP_Object_Cache {
 			$group = 'default';
 		}
 
-		if ( 'alloptions' === $key && 'options' === $group ) {
-			return $this->delete_alloptions( $force );
-		}
-
 		if ( ! $force && ! $this->exists( $key, $group ) ) {
 			return false;
 		}
@@ -546,10 +542,6 @@ class WP_Object_Cache {
 
 		if ( empty( $group ) ) {
 			$group = 'default';
-		}
-
-		if ( 'alloptions' === $key && 'options' === $group ) {
-			return $this->get_alloptions( $force, $found );
 		}
 
 		// Key is set internally, so we can use this value
@@ -687,8 +679,24 @@ class WP_Object_Cache {
 			$group = 'default';
 		}
 
-		if ( 'alloptions' === $key && 'options' === $group ) {
-			return $this->set_alloptions( $data, $expire );
+		if ( 'alloptions' === $key && 'options' === $group && null !== $this->maybe_alloptions_op ) {
+			// If we have a saved operation in maybe_alloptions_op
+			// execute it.  This works because WordPress always
+			// calls wp_cache_set for alloptions after modifying an
+			// autoloaded option.
+			//
+			// https://github.com/WordPress/WordPress/blob/4548b08236fa2fdc8d9443ed70e8b53f7057a151/wp-includes/option.php#L449-L457
+			// https://github.com/WordPress/WordPress/blob/4548b08236fa2fdc8d9443ed70e8b53f7057a151/wp-includes/option.php#L342-L356
+			// https://github.com/WordPress/WordPress/blob/4548b08236fa2fdc8d9443ed70e8b53f7057a151/wp-includes/option.php#L528-L534
+			$data = $this->do_alloptions_op();
+		} else if ( 'notoptions' !== $key ) {
+			// notoptions is called before alloptions in update_option().
+			// Just ignore it.
+			//
+			// Discard the operation after using it. If it was not
+			// used, the option was not an autoload option so it
+			// can be safely discarded.
+			$this->maybe_alloptions_op = null;
 		}
 
 		if ( is_object( $data ) ) {
@@ -709,87 +717,6 @@ class WP_Object_Cache {
 		$expire = 0 === $expire ? null : $expire;
 		$this->call_lcache( 'set', array( $key, $group ), $data, $expire );
 		return true;
-	}
-
-	/**
-	 * Get combined alloptions from separate cache keys and values.
-	 *
-	 * @param string $force Whether to force a refetch rather than relying on the local cache (default is false)
-	 * @param bool $found Optional. Whether the key was found in the cache. Disambiguates a return of false, a storable value. Passed by reference. Default null.
-	 * @return array
-	 */
-	protected function get_alloptions( $force = false, &$found = null ) {
-		$keys = $this->get( 'keys', 'lcache_alloptions_keys', $force );
-		$value = array();
-		if ( empty( $keys ) || ! is_array( $keys ) ) {
-			$found = false;
-			return $value;
-		}
-		foreach ( array_keys( $keys ) as $key ) {
-			$value[ $key ] = $this->get( $key, 'lcache_alloptions_values', $force );
-		}
-		$found = true;
-		return $value;
-	}
-
-	/**
-	 * Set alloptions as separate cache keys and values.
-	 *
-	 * @param array $data Original alloptions data.
-	 * @param integer $expire Expiration TTL.
-	 * @return bool
-	 */
-	protected function set_alloptions( $data, $expire = 0 ) {
-		$existing = $this->get_alloptions();
-		$keys = $this->get( 'keys', 'lcache_alloptions_keys' );
-		if ( empty( $keys ) || ! is_array( $keys ) ) {
-			$keys = array();
-		}
-		// Set any new values
-		foreach ( $data as $key => $value ) {
-			if ( isset( $existing[ $key ] ) && $existing[ $key ] === $value ) {
-				continue;
-			}
-			if ( ! isset( $keys[ $key ] ) ) {
-				$keys[ $key ] = true;
-			}
-			if ( ! $this->set( $key, $value, 'lcache_alloptions_values', $expire ) ) {
-				return false;
-			}
-		}
-		// Delete any removed values
-		foreach ( $existing as $key => $value ) {
-			if ( isset( $data[ $key ] ) ) {
-				continue;
-			}
-			if ( isset( $keys[ $key ] ) ) {
-				unset( $keys[ $key ] );
-			}
-			if ( ! $this->delete( $key, 'lcache_alloptions_values' ) ) {
-				return false;
-			}
-		}
-		if ( $this->set( 'keys', $keys, 'lcache_alloptions_keys', $expire ) ) {
-			return true;
-		}
-		return false;
-	}
-
-	/**
-	 * Delete combined alloptions from separate cache keys and values.
-	 *
-	 * @param bool $force Optional. Whether to force the unsetting of the cache
-	 *		key in the group
-	 * @return boolean
-	 */
-	protected function delete_alloptions( $force = false ) {
-		$keys = $this->get( 'keys', 'lcache_alloptions_keys', $force );
-		if ( ! empty( $keys ) && is_array( $keys ) ) {
-			foreach ( array_keys( $keys ) as $key ) {
-				$this->delete( $key, 'lcache_alloptions_values', $force );
-			}
-		}
-		return $this->delete( 'keys', 'lcache_alloptions_keys' );
 	}
 
 	/**
@@ -1082,6 +1009,41 @@ class WP_Object_Cache {
 		echo '<div class="message error"><p>' . wp_kses_post( $this->get_missing_requirements_error_message() ) . '</p></div>';
 	}
 
+	public function wp_action_add_option( $option, $value ) {
+		$this->maybe_alloptions_op = array( 'op' => 'add', 'option' => $option, 'value' => $value );
+	}
+
+	public function wp_action_update_option( $option, $value ) {
+		$this->maybe_alloptions_op = array( 'op' => 'update', 'option' => $option, 'value' => $value );
+	}
+
+	public function wp_action_delete_option( $option ) {
+		$this->maybe_alloptions_op = array( 'op' => 'delete', 'option' => $option );
+	}
+
+	private function do_alloptions_op() {
+		// Notice how the alloptions data was not passed here. We will
+		// always fetch it freshly to minimize possiblity of race
+		// conditions.
+
+		// Use $force=true to fetch the data from the shared cache.
+		// XXX: How to force fetch from the database? This is broken
+		// for multi node installations :(
+		$alloptions = $this->get( 'alloptions', 'options', true );
+
+		switch ( $this->maybe_alloptions_op['op'] ) {
+			case 'update':
+			case 'add':
+				$alloptions[ $this->maybe_alloptions_op['option'] ] = $this->maybe_alloptions_op['value'];
+				break;
+			delete:
+				unset( $alloptions[ $this->maybe_alloptions_op['option'] ] );
+				break;
+		}
+
+		return $alloptions;
+	}
+
 	/**
 	 * Get the missing requirements error message
 	 */
@@ -1139,6 +1101,15 @@ class WP_Object_Cache {
 
 		$this->multisite = is_multisite();
 		$this->blog_prefix = $this->multisite ? $blog_id . ':' : '';
+
+		$this->maybe_alloptions_op = null;
+
+		// Record option modifications for manual alloptions handling
+		if ( function_exists( 'add_action' ) ) {
+			add_action( 'add_option', array( $this, 'wp_action_add_option' ), 10, 2 );
+			add_action( 'update_option', array( $this, 'wp_action_update_option' ), 10, 2 );
+			add_action( 'delete_option', array( $this, 'wp_action_delete_option' ), 10, 1 );
+		}
 
 		$this->missing_requirements = self::check_missing_lcache_requirements();
 		if ( empty( $this->missing_requirements ) ) {
