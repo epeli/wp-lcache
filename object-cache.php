@@ -468,10 +468,6 @@ class WP_Object_Cache {
 			$group = 'default';
 		}
 
-		if ( 'alloptions' === $key && 'options' === $group ) {
-			return $this->delete_alloptions( $force );
-		}
-
 		if ( ! $force && ! $this->exists( $key, $group ) ) {
 			return false;
 		}
@@ -549,7 +545,11 @@ class WP_Object_Cache {
 		}
 
 		if ( 'alloptions' === $key && 'options' === $group ) {
-			return $this->get_alloptions( $force, $found );
+			// Disable alloptions from WordPress core by returning
+			// always empty but truthy array so it does not execute
+			// the alloptions sql query in wp_load_alloptions
+			// https://github.com/WordPress/WordPress/blob/4548b08236fa2fdc8d9443ed70e8b53f7057a151/wp-includes/option.php#L187
+			return array( '__lcache_empty_alloptions' => true );
 		}
 
 		// Key is set internally, so we can use this value
@@ -687,8 +687,9 @@ class WP_Object_Cache {
 			$group = 'default';
 		}
 
+		// alloptions is always empty just ignore it
 		if ( 'alloptions' === $key && 'options' === $group ) {
-			return $this->set_alloptions( $data, $expire );
+			return true;
 		}
 
 		if ( is_object( $data ) ) {
@@ -709,87 +710,6 @@ class WP_Object_Cache {
 		$expire = 0 === $expire ? null : $expire;
 		$this->call_lcache( 'set', array( $key, $group ), $data, $expire );
 		return true;
-	}
-
-	/**
-	 * Get combined alloptions from separate cache keys and values.
-	 *
-	 * @param string $force Whether to force a refetch rather than relying on the local cache (default is false)
-	 * @param bool $found Optional. Whether the key was found in the cache. Disambiguates a return of false, a storable value. Passed by reference. Default null.
-	 * @return array
-	 */
-	protected function get_alloptions( $force = false, &$found = null ) {
-		$keys = $this->get( 'keys', 'lcache_alloptions_keys', $force );
-		$value = array();
-		if ( empty( $keys ) || ! is_array( $keys ) ) {
-			$found = false;
-			return $value;
-		}
-		foreach ( array_keys( $keys ) as $key ) {
-			$value[ $key ] = $this->get( $key, 'lcache_alloptions_values', $force );
-		}
-		$found = true;
-		return $value;
-	}
-
-	/**
-	 * Set alloptions as separate cache keys and values.
-	 *
-	 * @param array $data Original alloptions data.
-	 * @param integer $expire Expiration TTL.
-	 * @return bool
-	 */
-	protected function set_alloptions( $data, $expire = 0 ) {
-		$existing = $this->get_alloptions();
-		$keys = $this->get( 'keys', 'lcache_alloptions_keys' );
-		if ( empty( $keys ) || ! is_array( $keys ) ) {
-			$keys = array();
-		}
-		// Set any new values
-		foreach ( $data as $key => $value ) {
-			if ( isset( $existing[ $key ] ) && $existing[ $key ] === $value ) {
-				continue;
-			}
-			if ( ! isset( $keys[ $key ] ) ) {
-				$keys[ $key ] = true;
-			}
-			if ( ! $this->set( $key, $value, 'lcache_alloptions_values', $expire ) ) {
-				return false;
-			}
-		}
-		// Delete any removed values
-		foreach ( $existing as $key => $value ) {
-			if ( isset( $data[ $key ] ) ) {
-				continue;
-			}
-			if ( isset( $keys[ $key ] ) ) {
-				unset( $keys[ $key ] );
-			}
-			if ( ! $this->delete( $key, 'lcache_alloptions_values' ) ) {
-				return false;
-			}
-		}
-		if ( $this->set( 'keys', $keys, 'lcache_alloptions_keys', $expire ) ) {
-			return true;
-		}
-		return false;
-	}
-
-	/**
-	 * Delete combined alloptions from separate cache keys and values.
-	 *
-	 * @param bool $force Optional. Whether to force the unsetting of the cache
-	 *		key in the group
-	 * @return boolean
-	 */
-	protected function delete_alloptions( $force = false ) {
-		$keys = $this->get( 'keys', 'lcache_alloptions_keys', $force );
-		if ( ! empty( $keys ) && is_array( $keys ) ) {
-			foreach ( array_keys( $keys ) as $key ) {
-				$this->delete( $key, 'lcache_alloptions_values', $force );
-			}
-		}
-		return $this->delete( 'keys', 'lcache_alloptions_keys' );
 	}
 
 	/**
