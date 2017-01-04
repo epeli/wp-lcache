@@ -548,10 +548,6 @@ class WP_Object_Cache {
 			$group = 'default';
 		}
 
-		if ( 'alloptions' === $key && 'options' === $group ) {
-			return $this->get_alloptions( $force, $found );
-		}
-
 		// Key is set internally, so we can use this value
 		if ( $this->isset_internal( $key, $group ) && ! $force ) {
 			$this->cache_hits += 1;
@@ -567,18 +563,25 @@ class WP_Object_Cache {
 			return false;
 		}
 
-		$value = $this->call_lcache( 'get', array( $key, $group ) );
+		// Get alloptions from separate keys and save the resultig
+		// array to internal cache like the individual values to avoid
+		// computing it every time it's requested.
+		if ( 'alloptions' === $key && 'options' === $group ) {
+			$value = $this->get_alloptions( $force, $found );
+		} else {
+			$value = $this->call_lcache( 'get', array( $key, $group ) );
 
-		// LCache returns `null` when the key doesn't exist
-		if ( null === $value ) {
-			$this->cache_misses += 1;
-			$found = false;
-			return false;
-		}
+			// LCache returns `null` when the key doesn't exist
+			if ( null === $value ) {
+				$this->cache_misses += 1;
+				$found = false;
+				return false;
+			}
 
-		// All non-numeric values are serialized
-		if ( ! is_numeric( $value ) ) {
-			$value = unserialize( $value );
+			// All non-numeric values are serialized
+			if ( ! is_numeric( $value ) ) {
+				$value = unserialize( $value );
+			}
 		}
 
 		$this->set_internal( $key, $group, $value );
@@ -741,6 +744,11 @@ class WP_Object_Cache {
 	 */
 	protected function set_alloptions( $data, $expire = 0 ) {
 		$existing = $this->get_alloptions();
+
+		// Cache full alloptions object only internally and save the
+		// individual keys to the shared caches.
+		$this->set_internal( 'alloptions', 'options', $data );
+
 		$keys = $this->get( 'keys', 'lcache_alloptions_keys' );
 		if ( empty( $keys ) || ! is_array( $keys ) ) {
 			$keys = array();
@@ -783,6 +791,7 @@ class WP_Object_Cache {
 	 * @return boolean
 	 */
 	protected function delete_alloptions( $force = false ) {
+		$this->unset_internal( 'alloptions', 'options' );
 		$keys = $this->get( 'keys', 'lcache_alloptions_keys', $force );
 		if ( ! empty( $keys ) && is_array( $keys ) ) {
 			foreach ( array_keys( $keys ) as $key ) {
