@@ -1,4 +1,7 @@
 <?php
+// This is a forked versio of the original object-cache.php from wp-lcache
+// https://github.com/epeli/wp-lcache/blob/cache-alloptions/object-cache.php
+// because https://github.com/lcache/wp-lcache/issues/111
 
 use \LCache\Address;
 use \LCache\APCuL1;
